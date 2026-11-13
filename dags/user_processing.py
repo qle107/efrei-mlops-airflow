@@ -4,6 +4,7 @@ from datetime import datetime
 from airflow.sdk import dag, task
 from airflow.sdk.bases.sensor import PokeReturnValue
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 API_URL = "https://raw.githubusercontent.com/FatimaMoqran/airflow-datasets/refs/heads/main/fakeuser.json"
 CSV_PATH = "/tmp/user_info.csv"
@@ -58,7 +59,7 @@ def user_processing():
             writer.writerow(user_info)
 
     @task
-    def save_user():
+    def store_user():
         # bonus : table temporaire + ON CONFLICT pour pouvoir relancer le DAG
         hook = PostgresHook(postgres_conn_id="postgres")
         with hook.get_conn() as conn, conn.cursor() as cur, open(CSV_PATH) as f:
@@ -70,6 +71,7 @@ def user_processing():
     user_info = extract_user(fake_user)
     processed = process_user(user_info)
     create_table >> fake_user
-    processed >> save_user()
+    processed >> store_user()
 
 
+user_processing()
