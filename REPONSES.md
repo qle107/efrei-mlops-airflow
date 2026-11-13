@@ -112,3 +112,51 @@ Choix : piste 2. COPY vers une table temporaire, puis `INSERT ... ON CONFLICT (i
 6. Un hook gère la connexion et expose des méthodes utilisables en Python. Un opérateur est une tâche prête à l'emploi qui utilise un hook en interne. Le hook est indispensable pour `copy_expert` (COPY en masse), que SQLExecuteQueryOperator n'expose pas.
 7. `fake_user >> user_info` est déjà implicite, car extract_user reçoit le résultat du sensor. create_table n'échange aucune donnée avec le sensor, donc la dépendance doit être explicite.
 8. Deux points à revoir : (a) remplacer le fichier `/tmp` par un stockage partagé, car avec plusieurs workers les tâches ne voient pas le même disque. (b) Mettre les secrets dans un secrets backend ou Vault, ajouter des retries et des alertes, et fixer une planification avec catchup. L'idempotence (bonus) est déjà en place.
+
+## TP CI/CD : GitHub Actions pour Airflow
+
+Dépôt : https://github.com/qle107/efrei-mlops-airflow (déjà créé avant ce TP, sous ce nom plutôt que `airflow-intro`). Workflow : `.github/workflows/ci.yml`, jobs `lint` puis `test-dags` (Airflow 3.0.0, version de l'image dans docker-compose.yaml). Tests : `tests/test_dags.py`.
+
+### Partie 1
+- `git status` montre avant le commit ce qui va partir (fichiers suivis, modifiés, non suivis). On évite ainsi d'envoyer un secret ou des fichiers lourds par erreur.
+- Sans `.gitignore`, on aurait envoyé `.venv/` (des milliers de fichiers), `logs/` (logs générés par Airflow), `__pycache__/`/`*.pyc` et surtout `.env`, avec ses variables locales, qui ne doit jamais partir sur GitHub.
+- Vérification : sur GitHub on voit `dags/user_processing.py` et `docker-compose.yaml`, mais pas de `logs/`.
+
+### Partie 2 (run « Premier workflow CI », vert en 7 s)
+Le log de « Dire bonjour » affiche `Bonjour depuis le runner GitHub`, puis `demo_ok.py`, `demo_ui.py` et `user_processing.py`.
+- Sans `actions/checkout@v4`, le runner est vide : `ls dags/` échoue (`No such file or directory`) et le job passe au rouge, puisque le runner n'a pas notre code.
+- Une indentation YAML fausse change la structure (une clé se retrouve rattachée au mauvais parent) ou rend le fichier invalide. GitHub affiche alors « Invalid workflow file » et ne lance rien. Comme en Python, l'indentation fait partie de la syntaxe.
+
+### Partie 3
+- En local, `uvx flake8 dags/ --select E9,F63,F7,F82 --show-source` n'affiche rien, et la commande de style (max 120) n'affiche aucune remarque. autopep8 n'a donc rien eu à corriger.
+- Job `lint` vert sur GitHub.
+- F401 : module importé mais jamais utilisé. F821 : nom non défini (variable ou fonction utilisée sans être définie ni importée).
+
+### Partie 4
+- Version : `apache/airflow:3.0.0`, d'où `AIRFLOW_VERSION: "3.0.0"`. `from airflow.models import DagBag` fonctionne en 3.0.0.
+- Test complété : `assert taches == attendues`.
+- Vérification : les deux jobs sont verts et le log affiche `3 passed`.
+- `needs: lint` : test-dags ne démarre qu'après un lint vert. Si le lint échoue, test-dags est marqué **skipped**, comme observé au cas A. On ne paie pas 1 à 3 minutes d'installation d'Airflow pour un code qui ne compile pas.
+- Constraints : le fichier fige la version de chacune des centaines de dépendances d'Airflow, avec un ensemble testé par le projet. Sans lui, pip prend les dernières versions, qui peuvent être incompatibles. Le build casse alors du jour au lendemain sans que notre code ait changé, et il n'est plus reproductible.
+- Provider Postgres : le runner part de zéro et n'a rien à voir avec notre image Docker. `pip install apache-airflow` n'installe pas `apache-airflow-providers-postgres`, donc l'import de `PostgresHook` lèverait `ModuleNotFoundError` dans le DagBag.
+
+### Partie 5 (runs réels)
+
+| Cas | Modification | Job qui échoue | Message à retrouver |
+|---|---|---|---|
+| A | Suppression de `from ...postgres import PostgresHook` | `lint` (test-dags : skipped) | `dags/user_processing.py:63:16: F821 undefined name 'PostgresHook'` |
+| B | Suppression de l'appel final `user_processing()` | `test-dags` (lint vert) | `AssertionError: assert 'user_processing' in {'demo_ok': ..., 'demo_ui': ...}` puis `KeyError: 'user_processing'`, soit 2 failed, 1 passed |
+| C | `store_user` renommée `save_user` | `test-dags` (lint vert) | `AssertionError: Tâches différentes : {'store_user', 'save_user'}`, soit 1 failed, 2 passed |
+
+Après chaque annulation, le commit est de nouveau vert (« Annulation cas B », « Annulation cas C »). Note : mes deux premiers essais de B et C (commits 7fdedbd, cfb79f7) cumulaient encore le cas A, faute d'annulation entre les deux. Ils ont été refaits séparément.
+- Cas B, flake8 ne voit rien parce que le fichier reste du Python valide : la fonction `user_processing` est définie et simplement jamais appelée. Ce n'est ni une erreur de syntaxe ni un nom non défini. Seul le chargement réel (DagBag) montre qu'aucun DAG n'est créé.
+- Cas C, l'utilité vient du test, qui sert de contrat : d'autres éléments dépendent du task_id (historique des runs, XComs tirés par task_id, alertes, dashboards, DAGs aval). Un renommage silencieux casse ces liens. Le test oblige à le rendre volontaire.
+- Cas B dans l'interface : aucune erreur ne s'affiche, le DAG disparaît simplement de la liste après le rescan du DAG processor, qui peut prendre plusieurs minutes. On peut chercher longtemps puisque « DAG Import Errors » reste vide. La CI le signale en environ 1 minute avec un message explicite.
+
+### Pour aller plus loin : PR
+- Le binôme ne doit pas valider sa propre PR. Avec la protection de branche, l'auteur ne peut pas approuver sa propre PR : il faut un autre relecteur. La relecture humaine voit ce que la CI ne teste pas : la logique métier, la lisibilité, les secrets en clair, la bonne planification, les effets de bord en production.
+
+### Bilan
+1. Rencontrées pendant les TP Airflow : (a) le DAG absent quand l'appel final `user_processing()` manque, sans aucun message, que `test_user_processing_existe` attrape (cas B) ; (b) un provider ou un import manquant. Par exemple, sans le provider Postgres, le DAG apparaît dans « DAG Import Errors » seulement après le rescan, alors que la CI l'attrape au push (cas A, test d'import). Elle n'aurait pas attrapé les erreurs d'exécution (KeyError `firstname`, ordre des colonnes du CSV), qui demandent des tests unitaires des tâches.
+2. Le lint est rapide (environ 10 s) et attrape les erreurs grossières. Les tests demandent d'installer Airflow, soit plusieurs minutes. Échouer vite et pas cher d'abord évite de gaspiller du temps de runner, et le premier message lu est le plus simple.
+3. En MLOps, la CI peut aussi vérifier : le schéma et la qualité des données (colonnes, types, valeurs absurdes comme des prix négatifs), le ré-entraînement sur un petit jeu, des métriques minimales (R², MAE en dessous d'un seuil, pas de régression par rapport au modèle en production), le chargement et une prédiction de référence du modèle sérialisé, ainsi que le versionnage du modèle (MLflow).
