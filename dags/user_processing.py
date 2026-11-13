@@ -58,7 +58,7 @@ def user_processing():
             writer.writerow(user_info)
 
     @task
-    def store_user():
+    def save_user():
         # bonus : table temporaire + ON CONFLICT pour pouvoir relancer le DAG
         hook = PostgresHook(postgres_conn_id="postgres")
         with hook.get_conn() as conn, conn.cursor() as cur, open(CSV_PATH) as f:
@@ -70,6 +70,6 @@ def user_processing():
     user_info = extract_user(fake_user)
     processed = process_user(user_info)
     create_table >> fake_user
-    processed >> store_user()
+    processed >> save_user()
 
 
