@@ -1,5 +1,7 @@
 # Réponses TP 0 à TP 3 (Apache Airflow 3.0.0)
 
+Binôme : Quang Dat LE, Adrien CHUEMBOU MBAH
+
 Projet : `airflow-intro/` (docker-compose.yaml, .env, dags/, logs/, plugins/, config/, .venv)
 
 ## TP 0 : Environnement
