@@ -1,0 +1,17 @@
+.venv/
+logs/
+__pycache__/
+.env
+config/airflow.cfg
+
+# outils IA / editeurs
+.claude/
+CLAUDE.md
+AGENTS.md
+.cursor/
+.cursorrules
+.aider*
+.hermes/
+.codex/
+.copilot/
+*.log

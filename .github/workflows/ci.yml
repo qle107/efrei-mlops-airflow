@@ -1,0 +1,29 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  dags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          activate-environment: true
+      - name: Install Airflow (same version as the Docker image)
+        run: >
+          uv pip install
+          --constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.0.0/constraints-3.12.txt
+          apache-airflow==3.0.0 apache-airflow-providers-postgres==6.1.3
+      - name: Check every DAG imports
+        run: |
+          airflow db migrate > /dev/null
+          python - <<'EOF'
+          from airflow.models import DagBag
+          bag = DagBag(dag_folder="dags", include_examples=False)
+          assert not bag.import_errors, bag.import_errors
+          expected = {"demo_ui", "demo_ok", "user_processing"}
+          assert expected <= set(bag.dag_ids), set(bag.dag_ids)
+          print("OK:", sorted(bag.dag_ids))
+          EOF
