@@ -15,3 +15,5 @@ AGENTS.md
 .codex/
 .copilot/
 *.log
+*.pyc
+.pytest_cache/
